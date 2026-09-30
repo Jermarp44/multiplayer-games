@@ -3,36 +3,78 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Multiplayer Games Lab</title>
+    <title>Gameverse Arena</title>
+    <meta
+      name="description"
+      content="A polished collection of 8 multiplayer-inspired game concepts built in HTML, CSS, and JavaScript."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
-    <div class="page-shell">
-      <header class="topbar">
-        <div>
-          <p class="eyebrow">Arcade Collection</p>
-          <h1>Multiplayer Games Lab</h1>
-        </div>
-        <div class="status-pill">8 game prototypes</div>
-      </header>
+    <div class="page-bg"></div>
 
-      <section class="games-grid" id="gamesGrid"></section>
-
-      <section class="stage-panel">
-        <div class="stage-header">
-          <h2 id="stageTitle">Select a game</h2>
-          <button id="resetGameBtn" class="secondary-button">Reset Demo</button>
+    <div class="container">
+      <header class="hero">
+        <div class="hero-copy">
+          <span class="eyebrow">MULTIPLAYER GAME LAB</span>
+          <h1>Gameverse Arena</h1>
+          <p>
+            Eight original multiplayer concepts presented as polished browser demos:
+            tactical battles, co-op puzzle play, strategy, and card arena combat.
+          </p>
         </div>
-        <div id="gameStage" class="game-stage empty-state">
-          <div class="empty-copy">
-            <h3>Choose a game prototype</h3>
-            <p>
-              Explore a collection of eight multiplayer-inspired browser games built as
-              lightweight playable demos.
-            </p>
+
+        <div class="hero-stats">
+          <div class="stat-box">
+            <strong>8</strong>
+            <span>Prototype games</span>
+          </div>
+          <div class="stat-box">
+            <strong>HTML5</strong>
+            <span>Pure browser build</span>
+          </div>
+          <div class="stat-box">
+            <strong>Live</strong>
+            <span>Playable demos</span>
           </div>
         </div>
-      </section>
+      </header>
+
+      <main class="layout">
+        <aside class="sidebar">
+          <div class="sidebar-header">
+            <h2>Game Gallery</h2>
+            <span>Choose a concept</span>
+          </div>
+          <div id="gameList" class="game-list"></div>
+        </aside>
+
+        <section class="stage-panel">
+          <div class="stage-topbar">
+            <div>
+              <span class="panel-tag">Selected Prototype</span>
+              <h2 id="stageTitle">Choose a game</h2>
+            </div>
+            <button id="resetButton" class="ghost-button">Reset Demo</button>
+          </div>
+
+          <div id="stage" class="stage empty-state">
+            <div class="empty-copy">
+              <div class="orb"></div>
+              <h3>Pick a game to begin</h3>
+              <p>
+                Each prototype includes its own visual identity, mechanics, and quick loop.
+              </p>
+            </div>
+          </div>
+        </section>
+      </main>
     </div>
 
     <script src="script.js"></script>
