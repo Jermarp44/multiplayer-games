@@ -13,12 +13,86 @@ const gameList = document.getElementById('gameList');
 const stage = document.getElementById('stage');
 const stageTitle = document.getElementById('stageTitle');
 const resetButton = document.getElementById('resetButton');
+const roundStatus = document.getElementById('roundStatus');
+const muteButton = document.getElementById('muteButton');
 
 let activeGameId = null;
 let activeReset = null;
 let activeRafId = null;
 let activeIntervalId = null;
 const runtimeCleanup = [];
+
+const gameState = {
+  soundEnabled: true,
+  round: 1,
+  wins: 0,
+  losses: 0,
+  resultVisible: false,
+};
+
+const audioManager = (() => {
+  let context = null;
+
+  const ensureContext = () => {
+    if (!context) {
+      const AudioCtor = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtor) return null;
+      context = new AudioCtor();
+    }
+    if (context.state === 'suspended') context.resume();
+    return context;
+  };
+
+  const tone = (frequency, duration = 0.12, type = 'sine', volume = 0.05, slide = 0) => {
+    if (!gameState.soundEnabled) return;
+    const ctx = ensureContext();
+    if (!ctx) return;
+
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    const now = ctx.currentTime;
+
+    osc.type = type;
+    osc.frequency.setValueAtTime(frequency, now);
+    if (slide) osc.frequency.linearRampToValueAtTime(frequency + slide, now + duration);
+
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(volume, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + duration);
+  };
+
+  return {
+    play(name) {
+      if (!gameState.soundEnabled) return;
+      const sounds = {
+        start: () => tone(220, 0.12, 'triangle', 0.04, 100),
+        win: () => {
+          tone(440, 0.12, 'triangle', 0.06, 80);
+          setTimeout(() => tone(660, 0.18, 'triangle', 0.06, 120), 70);
+        },
+        lose: () => {
+          tone(220, 0.18, 'sawtooth', 0.05, -80);
+          setTimeout(() => tone(160, 0.2, 'square', 0.04, -60), 100);
+        },
+        click: () => tone(660, 0.06, 'square', 0.03, 40),
+        hit: () => tone(185, 0.08, 'square', 0.04, -40),
+        power: () => tone(720, 0.16, 'triangle', 0.05, 100),
+        alert: () => tone(300, 0.2, 'sawtooth', 0.04, 30),
+      };
+      if (sounds[name]) sounds[name]();
+    },
+    toggle() {
+      gameState.soundEnabled = !gameState.soundEnabled;
+      setMuteButton();
+      if (gameState.soundEnabled) audioManager.play('start');
+    },
+  };
+})();
 
 function clearRuntime() {
   if (activeRafId) cancelAnimationFrame(activeRafId);
@@ -59,6 +133,68 @@ function makeShell(title, metrics, extra = '') {
   `;
 }
 
+function setMuteButton() {
+  if (muteButton) {
+    muteButton.textContent = gameState.soundEnabled ? '🔊 Sound On' : '🔇 Sound Off';
+  }
+}
+
+function updateRoundStatus() {
+  if (roundStatus) {
+    roundStatus.textContent = `Round ${gameState.round} • Wins ${gameState.wins} • Losses ${gameState.losses}`;
+  }
+}
+
+function showResultScreen({ title, outcome, score, detail }) {
+  const shell = stage.querySelector('.game-shell');
+  if (!shell) return;
+
+  const existing = shell.querySelector('.result-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.className = `result-overlay ${outcome === 'Victory' ? 'win' : 'loss'}`;
+  overlay.innerHTML = `
+    <div class="result-card">
+      <span class="result-tag">${title}</span>
+      <h3>${outcome}</h3>
+      <p class="result-score">Score: ${score}</p>
+      <p>${detail}</p>
+      <div class="result-actions">
+        <button type="button" class="result-button">Play Next Round</button>
+      </div>
+    </div>
+  `;
+
+  shell.appendChild(overlay);
+
+  const button = overlay.querySelector('.result-button');
+  if (button) {
+    button.addEventListener('click', () => {
+      overlay.remove();
+      gameState.resultVisible = false;
+      if (activeReset) activeReset();
+    });
+  }
+}
+
+function resolveRound({ title, outcome, score, detail }) {
+  if (gameState.resultVisible) return;
+  gameState.resultVisible = true;
+
+  if (outcome === 'Victory') {
+    gameState.wins += 1;
+    audioManager.play('win');
+  } else {
+    gameState.losses += 1;
+    audioManager.play('lose');
+  }
+
+  gameState.round += 1;
+  updateRoundStatus();
+  showResultScreen({ title, outcome, score, detail });
+}
+
 function renderGameList() {
   gameList.innerHTML = games
     .map(
@@ -89,7 +225,9 @@ function selectGame(gameId) {
   stageTitle.textContent = game.name;
   renderGameList();
   clearRuntime();
+  gameState.resultVisible = false;
   activeReset = game.init;
+  audioManager.play('start');
   game.init();
 }
 
@@ -105,7 +243,15 @@ function setEmptyState() {
 }
 
 resetButton.addEventListener('click', () => {
-  if (activeReset) activeReset();
+  if (activeReset) {
+    clearRuntime();
+    gameState.resultVisible = false;
+    activeReset();
+  }
+});
+
+muteButton.addEventListener('click', () => {
+  audioManager.toggle();
 });
 
 function initChopChop() {
@@ -119,9 +265,9 @@ function initChopChop() {
   const state = {
     player: { x: 180, y: 260, radius: 22, wood: 0, level: 1, hp: 100, cooldown: 0 },
     enemies: [
-      { x: 760, y: 170, radius: 18, speed: 1.3 },
-      { x: 810, y: 360, radius: 16, speed: 1.5 },
-      { x: 620, y: 290, radius: 20, speed: 1.1 },
+      { x: 760, y: 170, radius: 18, speed: 1.3, ai: 0 },
+      { x: 810, y: 360, radius: 16, speed: 1.5, ai: 1 },
+      { x: 620, y: 290, radius: 20, speed: 1.1, ai: 2 },
     ],
     trees: [
       { x: 300, y: 160, size: 34, hp: 100 },
@@ -218,6 +364,8 @@ function initChopChop() {
   };
 
   const tick = () => {
+    if (gameState.resultVisible) return;
+
     const speed = 3.2 + state.player.level * 0.35;
     if (keys.w) state.player.y -= speed;
     if (keys.s) state.player.y += speed;
@@ -231,8 +379,9 @@ function initChopChop() {
       const target = state.trees.find((tree) => Math.hypot(tree.x - state.player.x, tree.y - state.player.y) < 90);
       if (target) {
         target.hp -= 28 + state.player.level * 8;
-        state.player.wood += 10;
+        state.player.wood += 12;
         state.player.cooldown = 0.4;
+        audioManager.play('hit');
         if (target.hp <= 0) {
           const newX = 70 + Math.random() * (canvas.width - 140);
           const newY = 70 + Math.random() * (canvas.height - 140);
@@ -240,6 +389,7 @@ function initChopChop() {
           target.y = newY;
           target.hp = 80 + Math.random() * 50;
           state.player.level += 1;
+          audioManager.play('power');
         }
       }
     }
@@ -252,10 +402,24 @@ function initChopChop() {
       }
     });
 
+    if (state.player.wood >= 180 || state.player.level >= 8) {
+      resolveRound({
+        title: 'ChopChop.io',
+        outcome: 'Victory',
+        score: state.player.wood + state.player.level * 30,
+        detail: 'You outlasted the rival lumber crew and secured the forest crown.',
+      });
+      return;
+    }
+
     if (state.player.hp <= 0) {
-      state.player.hp = 100;
-      state.player.wood = 0;
-      state.player.level = 1;
+      resolveRound({
+        title: 'ChopChop.io',
+        outcome: 'Defeat',
+        score: state.player.wood,
+        detail: 'The raiders overwhelmed the camp before the forest was secured.',
+      });
+      return;
     }
 
     updateMetrics();
@@ -281,6 +445,13 @@ function initBlobMagnet() {
     r: 8 + Math.random() * 10,
     vx: (Math.random() - 0.5) * 2.5,
     vy: (Math.random() - 0.5) * 2.5,
+  }));
+  const drones = Array.from({ length: 3 }, (_, index) => ({
+    x: 720 + index * 70,
+    y: 120 + index * 110,
+    r: 15,
+    vx: 0,
+    vy: 0,
   }));
   const keys = { ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false };
 
@@ -323,6 +494,13 @@ function initBlobMagnet() {
       ctx.fill();
     });
 
+    drones.forEach((drone) => {
+      ctx.fillStyle = '#fca5a5';
+      ctx.beginPath();
+      ctx.arc(drone.x, drone.y, drone.r, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
     ctx.fillStyle = blob.charge === 1 ? '#67e8f9' : '#f472b6';
     ctx.beginPath();
     ctx.arc(blob.x, blob.y, blob.radius, 0, Math.PI * 2);
@@ -330,6 +508,8 @@ function initBlobMagnet() {
   };
 
   const tick = () => {
+    if (gameState.resultVisible) return;
+
     const speed = 4.5;
     if (keys.ArrowUp) blob.y -= speed;
     if (keys.ArrowDown) blob.y += speed;
@@ -353,6 +533,7 @@ function initBlobMagnet() {
 
       if (Math.hypot(item.x - blob.x, item.y - blob.y) < item.r + blob.radius) {
         blob.score += 5;
+        audioManager.play('click');
         item.x = 20 + Math.random() * (canvas.width - 40);
         item.y = 20 + Math.random() * (canvas.height - 40);
         item.vx = (Math.random() - 0.5) * 4;
@@ -360,9 +541,38 @@ function initBlobMagnet() {
       }
     });
 
-    if (blob.score > 120) {
-      blob.score = 0;
-      blob.lives = 5;
+    drones.forEach((drone) => {
+      const dx = blob.x - drone.x;
+      const dy = blob.y - drone.y;
+      const dist = Math.hypot(dx, dy) || 1;
+      drone.x += (dx / dist) * 1.3;
+      drone.y += (dy / dist) * 1.3;
+      if (dist < drone.r + blob.radius + 8) {
+        blob.lives -= 1;
+        audioManager.play('alert');
+        blob.x = 150 + Math.random() * 200;
+        blob.y = 130 + Math.random() * 200;
+      }
+    });
+
+    if (blob.score >= 180) {
+      resolveRound({
+        title: 'Blob Magnet',
+        outcome: 'Victory',
+        score: blob.score,
+        detail: 'You magnetized the arena and left the rival drones spinning in reverse.',
+      });
+      return;
+    }
+
+    if (blob.lives <= 0) {
+      resolveRound({
+        title: 'Blob Magnet',
+        outcome: 'Defeat',
+        score: blob.score,
+        detail: 'The drones intercepted your charge before the arena flipped.',
+      });
+      return;
     }
 
     drawField();
@@ -383,9 +593,9 @@ function initNeonRacer() {
   const ctx = canvas.getContext('2d');
   const state = {
     player: { x: canvas.width / 2, y: canvas.height - 70, w: 22, h: 22, speed: 5 },
+    ai: { x: canvas.width / 2, y: 60, w: 22, h: 22, speed: 3 },
     obstacles: [],
     score: 0,
-    timer: 0,
     health: 3,
   };
 
@@ -445,6 +655,10 @@ function initNeonRacer() {
     state.obstacles = state.obstacles.filter((ob) => ob.y < canvas.height + 40);
     if (Math.random() < 0.03) spawnObstacle();
 
+    const aiTargetX = state.player.x > state.ai.x ? 1 : -1;
+    state.ai.x += aiTargetX * state.ai.speed;
+    state.ai.x = Math.max(70, Math.min(canvas.width - 70, state.ai.x));
+
     if (state.obstacles.some((ob) => {
       const hitX = state.player.x + state.player.w > ob.x && state.player.x < ob.x + ob.w;
       const hitY = state.player.y + state.player.h > ob.y && state.player.y < ob.y + ob.h;
@@ -454,17 +668,40 @@ function initNeonRacer() {
       state.obstacles = [];
       state.player.x = canvas.width / 2;
       state.player.y = canvas.height - 70;
-      if (state.health <= 0) {
-        state.health = 3;
-        state.score = 0;
-      }
+      audioManager.play('alert');
     }
 
-    state.score += 1;
-    state.timer += 1;
+    if (state.ai.x > state.player.x - 10 && state.ai.x < state.player.x + 10 && Math.abs(state.ai.y - state.player.y) < 60) {
+      state.health -= 1;
+      state.ai.x = canvas.width / 2;
+      audioManager.play('alert');
+    }
+
+    if (state.health <= 0) {
+      resolveRound({
+        title: 'Neon Line Racer',
+        outcome: 'Defeat',
+        score: state.score,
+        detail: 'The AI racer boxed you in and the lane collapsed under pressure.',
+      });
+      return;
+    }
+
+    state.score += 2;
+    if (state.score >= 1200) {
+      resolveRound({
+        title: 'Neon Line Racer',
+        outcome: 'Victory',
+        score: state.score,
+        detail: 'You outran the AI rival and controlled the entire neon lane.',
+      });
+      return;
+    }
 
     ctx.fillStyle = '#f5f7ff';
     ctx.fillRect(state.player.x, state.player.y, state.player.w, state.player.h);
+    ctx.fillStyle = '#fca5a5';
+    ctx.fillRect(state.ai.x, state.ai.y, state.ai.w, state.ai.h);
 
     if (state.score % 500 === 0) {
       state.player.speed += 0.2;
@@ -474,6 +711,7 @@ function initNeonRacer() {
   };
 
   const tick = () => {
+    if (gameState.resultVisible) return;
     draw();
     activeRafId = requestAnimationFrame(tick);
   };
@@ -488,21 +726,24 @@ function initSyncDefenders() {
   const canvas = document.getElementById('gameCanvas');
   const ctx = canvas.getContext('2d');
 
-  const towers = [
-    { x: 180, y: 290, radius: 26 },
-    { x: 470, y: 245, radius: 30 },
-    { x: 760, y: 320, radius: 27 },
-  ];
-  const enemies = [
-    { x: 100, y: 180, r: 12, hp: 100, speed: 1 },
-    { x: 120, y: 400, r: 12, hp: 100, speed: 1.3 },
-    { x: 90, y: 260, r: 12, hp: 100, speed: 1.2 },
-  ];
+  const state = {
+    towers: [
+      { x: 180, y: 290, radius: 26 },
+      { x: 470, y: 245, radius: 30 },
+      { x: 760, y: 320, radius: 27 },
+    ],
+    enemies: [
+      { x: 100, y: 180, r: 12, hp: 100, speed: 1 },
+      { x: 120, y: 400, r: 12, hp: 100, speed: 1.3 },
+      { x: 90, y: 260, r: 12, hp: 100, speed: 1.2 },
+    ],
+    baseHp: 9,
+  };
 
   const updateMetrics = (pulse, beat, sync) => {
     const metrics = stage.querySelectorAll('.metric');
     metrics[0].textContent = `Beat: ${beat} BPM`;
-    metrics[1].textContent = `Towers: ${towers.length}`;
+    metrics[1].textContent = `Towers: ${state.towers.length}`;
     metrics[2].textContent = `Sync: ${sync}%`;
   };
 
@@ -519,7 +760,7 @@ function initSyncDefenders() {
     ctx.fillStyle = '#182b3c';
     ctx.fillRect(75, 420, 830, 24);
 
-    towers.forEach((tower, index) => {
+    state.towers.forEach((tower, index) => {
       const glow = 18 + pulse * 24;
       ctx.fillStyle = '#7dd3fc';
       ctx.beginPath();
@@ -527,10 +768,13 @@ function initSyncDefenders() {
       ctx.fill();
     });
 
-    enemies.forEach((enemy, index) => {
+    state.enemies.forEach((enemy, index) => {
       enemy.x += enemy.speed * 0.9;
       enemy.y += Math.sin((Date.now() / 300) + index) * 0.4;
-      if (enemy.x > canvas.width + 30) enemy.x = -30;
+      if (enemy.x > canvas.width + 30) {
+        state.baseHp -= 1;
+        enemy.x = -30;
+      }
 
       ctx.fillStyle = '#4ade80';
       ctx.beginPath();
@@ -540,18 +784,46 @@ function initSyncDefenders() {
 
     const active = beat % 12 < 4;
     if (active) {
-      towers.forEach((tower, index) => {
-        const target = enemies[index % enemies.length];
-        ctx.strokeStyle = '#fbbf24';
-        ctx.beginPath();
-        ctx.moveTo(tower.x, tower.y);
-        ctx.lineTo(target.x, target.y);
-        ctx.stroke();
+      state.towers.forEach((tower, index) => {
+        const target = state.enemies[index % state.enemies.length];
+        if (target) {
+          target.hp -= 12;
+          if (target.hp <= 0) {
+            state.enemies = state.enemies.filter((e) => e !== target);
+            audioManager.play('click');
+          }
+          ctx.strokeStyle = '#fbbf24';
+          ctx.beginPath();
+          ctx.moveTo(tower.x, tower.y);
+          ctx.lineTo(target.x, target.y);
+          ctx.stroke();
+        }
       });
+    }
+
+    if (state.baseHp <= 0) {
+      resolveRound({
+        title: 'SyncDefenders',
+        outcome: 'Defeat',
+        score: state.towers.length * 25,
+        detail: 'The rhythm line was broken and the AI swarm reached your base.',
+      });
+      return;
+    }
+
+    if (state.enemies.length === 0) {
+      resolveRound({
+        title: 'SyncDefenders',
+        outcome: 'Victory',
+        score: 100 + state.towers.length * 35,
+        detail: 'Your rhythm tower chain synchronized perfectly and held the lane.',
+      });
+      return;
     }
   };
 
   const tick = () => {
+    if (gameState.resultVisible) return;
     draw();
     activeRafId = requestAnimationFrame(tick);
   };
@@ -571,6 +843,7 @@ function initEscapeTheCode() {
     selection: [],
     solution: [2, 4, 1, 3],
     timeLeft: 90,
+    aiHint: 'Ava: Follow the clue order from the oldest code path.',
   };
 
   const pick = (value) => {
@@ -579,8 +852,16 @@ function initEscapeTheCode() {
       const solved = puzzle.selection.every((item, idx) => item === puzzle.solution[idx]);
       if (solved) {
         puzzle.code = [1, 2, 3, 4];
+        audioManager.play('power');
+        resolveRound({
+          title: 'Escape the Code',
+          outcome: 'Victory',
+          score: Math.max(0, Math.ceil(puzzle.timeLeft) * 10),
+          detail: 'The final door unlocked and your co-op squad escaped the server core.',
+        });
       } else {
         puzzle.selection = [];
+        puzzle.aiHint = 'Owen: Wrong sequence. Reset and match the clue chain.';
       }
     }
   };
@@ -632,9 +913,13 @@ function initEscapeTheCode() {
     });
 
     ctx.fillStyle = '#eff6ff';
-    ctx.font = 'bold 26px sans-serif';
+    ctx.font = 'bold 24px sans-serif';
     const status = puzzle.selection.length === 4 && puzzle.selection.every((item, idx) => item === puzzle.solution[idx]) ? 'Door unlocked' : 'Match the clue order';
     ctx.fillText(status, 200, 470);
+
+    ctx.fillStyle = '#7dd3fc';
+    ctx.font = '16px sans-serif';
+    ctx.fillText(puzzle.aiHint, 120, 510);
 
     const metrics = stage.querySelectorAll('.metric');
     metrics[0].textContent = `Timer: ${Math.max(0, Math.ceil(puzzle.timeLeft))}s`;
@@ -643,8 +928,20 @@ function initEscapeTheCode() {
   };
 
   const tick = () => {
+    if (gameState.resultVisible) return;
     puzzle.timeLeft = Math.max(0, puzzle.timeLeft - 0.05);
     render();
+
+    if (puzzle.timeLeft <= 0) {
+      resolveRound({
+        title: 'Escape the Code',
+        outcome: 'Defeat',
+        score: 0,
+        detail: 'The AI teammates reached the end of the clock before the correct path was matched.',
+      });
+      return;
+    }
+
     activeRafId = requestAnimationFrame(tick);
   };
 
@@ -678,12 +975,13 @@ function initPixelHeist() {
   ];
   let activeCamera = 1;
   let score = 0;
+  let security = 3;
 
   const updateMetrics = () => {
     const metrics = stage.querySelectorAll('.metric');
-    metrics[0].textContent = `Security: ${3 - score}`;
+    metrics[0].textContent = `Security: ${security}`;
     metrics[1].textContent = `Target: ${activeCamera + 1}`;
-    metrics[2].textContent = `Feed: ${(3 - (frame % 3))}s`;
+    metrics[2].textContent = `Feed: ${Math.max(0, 3 - (frame % 3))}s`;
   };
 
   const render = () => {
@@ -726,16 +1024,40 @@ function initPixelHeist() {
     const x = ((event.clientX - rect.left) / rect.width) * canvas.width;
     const y = ((event.clientY - rect.top) / rect.height) * canvas.height;
 
+    let hit = false;
     cameras.forEach((cam, index) => {
       const inside = x >= cam.x && x <= cam.x + cam.w && y >= cam.y && y <= cam.y + cam.h;
       if (inside && index === activeCamera && cam.thief) {
         score += 1;
         cam.thief = false;
+        hit = true;
+        audioManager.play('power');
       }
     });
 
+    if (!hit) {
+      security = Math.max(0, security - 1);
+      audioManager.play('alert');
+    }
+
     if (score >= 3) {
-      score = 0;
+      resolveRound({
+        title: 'Pixel Art Heist',
+        outcome: 'Victory',
+        score: 100 + score * 30,
+        detail: 'The thief was tagged before the security cycle finished.',
+      });
+      return;
+    }
+
+    if (security <= 0) {
+      resolveRound({
+        title: 'Pixel Art Heist',
+        outcome: 'Defeat',
+        score: score * 20,
+        detail: 'The guard loop caught the team too late and the AI thief escaped.',
+      });
+      return;
     }
   };
 
@@ -743,6 +1065,7 @@ function initPixelHeist() {
   runtimeCleanup.push(() => canvas.removeEventListener('click', onClick));
 
   const tick = () => {
+    if (gameState.resultVisible) return;
     render();
     activeRafId = requestAnimationFrame(tick);
   };
@@ -766,20 +1089,23 @@ function initGridCommand() {
     }
   }
 
-  const units = [
-    { x: 1, y: 1, hp: 3, color: '#f9a8d4' },
-    { x: 2, y: 5, hp: 3, color: '#67e8f9' },
-    { x: 5, y: 2, hp: 3, color: '#fbbf24' },
-  ];
-  const enemies = [
-    { x: 6, y: 6, hp: 3, color: '#f87171' },
-    { x: 6, y: 1, hp: 3, color: '#fca5a5' },
-  ];
+  const state = {
+    selected: null,
+    units: [
+      { x: 1, y: 1, hp: 3, color: '#f9a8d4' },
+      { x: 2, y: 5, hp: 3, color: '#67e8f9' },
+      { x: 5, y: 2, hp: 3, color: '#fbbf24' },
+    ],
+    enemies: [
+      { x: 6, y: 6, hp: 3, color: '#f87171' },
+      { x: 6, y: 1, hp: 3, color: '#fca5a5' },
+    ],
+  };
 
   const updateMetrics = () => {
     const metrics = stage.querySelectorAll('.metric');
     metrics[0].textContent = `Timer: ${timeLeft.toFixed(1)}s`;
-    metrics[1].textContent = `Units: ${units.length}`;
+    metrics[1].textContent = `Units: ${state.units.length}`;
     metrics[2].textContent = 'Resolve: on';
   };
 
@@ -798,19 +1124,26 @@ function initGridCommand() {
       }
     }
 
-    units.forEach((unit) => {
+    state.units.forEach((unit) => {
       const px = 170 + unit.x * 76 + 22;
       const py = 70 + unit.y * 62 + 18;
       ctx.fillStyle = unit.color;
       ctx.fillRect(px, py, 30, 30);
     });
 
-    enemies.forEach((enemy) => {
+    state.enemies.forEach((enemy) => {
       const px = 170 + enemy.x * 76 + 22;
       const py = 70 + enemy.y * 62 + 18;
       ctx.fillStyle = enemy.color;
       ctx.fillRect(px, py, 30, 30);
     });
+
+    if (state.selected) {
+      const px = 170 + state.selected.x * 76 + 10;
+      const py = 70 + state.selected.y * 62 + 10;
+      ctx.strokeStyle = '#fef08a';
+      ctx.strokeRect(px, py, 50, 50);
+    }
 
     ctx.fillStyle = '#ffffff';
     ctx.font = 'bold 24px sans-serif';
@@ -826,25 +1159,76 @@ function initGridCommand() {
     const row = Math.floor((y - 70) / 62);
     if (row < 0 || col < 0 || row >= 8 || col >= 8) return;
 
-    if (col >= 0 && row >= 0) {
-      const target = units.find((unit) => unit.x === col && unit.y === row);
-      if (!target) {
-        units.forEach((unit) => {
-          const d = Math.abs(unit.x - col) + Math.abs(unit.y - row);
-          if (d <= 2) {
-            unit.x = col;
-            unit.y = row;
-          }
-        });
-      }
+    const selectedUnit = state.units.find((unit) => unit.x === col && unit.y === row);
+    if (selectedUnit) {
+      state.selected = selectedUnit;
+      return;
     }
+
+    if (!state.selected) return;
+    const d = Math.abs(state.selected.x - col) + Math.abs(state.selected.y - row);
+    if (d <= 2) {
+      state.selected.x = col;
+      state.selected.y = row;
+      audioManager.play('click');
+    }
+
+    state.enemies.forEach((enemy) => {
+      const enemyDist = Math.abs(enemy.x - state.selected.x) + Math.abs(enemy.y - state.selected.y);
+      if (enemyDist <= 1) {
+        enemy.hp -= 1;
+        if (enemy.hp <= 0) {
+          state.enemies = state.enemies.filter((entry) => entry !== enemy);
+        }
+      }
+    });
   };
 
   canvas.addEventListener('click', onClick);
   runtimeCleanup.push(() => canvas.removeEventListener('click', onClick));
 
   const tick = () => {
+    if (gameState.resultVisible) return;
     render();
+
+    if (timeLeft <= 0) {
+      resolveRound({
+        title: 'GridCommand',
+        outcome: 'Defeat',
+        score: state.units.length * 25,
+        detail: 'The clock expired before your command squad could finish the enemy line.',
+      });
+      return;
+    }
+
+    if (state.enemies.length === 0) {
+      resolveRound({
+        title: 'GridCommand',
+        outcome: 'Victory',
+        score: 100 + state.units.length * 40,
+        detail: 'Your tactics resolved cleanly and the enemy line collapsed under pressure.',
+      });
+      return;
+    }
+
+    state.enemies.forEach((enemy) => {
+      const nearest = state.units.reduce((best, unit) => {
+        const distance = Math.abs(unit.x - enemy.x) + Math.abs(unit.y - enemy.y);
+        if (!best || distance < best.distance) return { unit, distance };
+        return best;
+      }, null);
+
+      if (!nearest) return;
+      if (nearest.distance > 0) {
+        if (Math.abs(nearest.unit.x - enemy.x) > 0) {
+          enemy.x += nearest.unit.x > enemy.x ? 1 : -1;
+        }
+        if (Math.abs(nearest.unit.y - enemy.y) > 0) {
+          enemy.y += nearest.unit.y > enemy.y ? 1 : -1;
+        }
+      }
+    });
+
     activeRafId = requestAnimationFrame(tick);
   };
 
@@ -913,10 +1297,16 @@ function initDeckArena() {
     if (!card) return;
     state.enemyHp = Math.max(0, state.enemyHp - card.damage);
     state.hand.splice(index, 1);
+    audioManager.play('hit');
 
     if (state.enemyHp <= 0) {
-      state.enemyHp = 12;
-      state.playerHp = Math.min(18, state.playerHp + 2);
+      resolveRound({
+        title: 'DeckBuilder Arena',
+        outcome: 'Victory',
+        score: 120 + state.playerHp * 5,
+        detail: 'Your deck outplayed the AI champion and won the arena duel.',
+      });
+      return;
     }
 
     if (state.hand.length === 0) {
@@ -929,8 +1319,13 @@ function initDeckArena() {
 
     state.playerHp = Math.max(0, state.playerHp - 2);
     if (state.playerHp <= 0) {
-      state.playerHp = 18;
-      state.enemyHp = 12;
+      resolveRound({
+        title: 'DeckBuilder Arena',
+        outcome: 'Defeat',
+        score: state.enemyHp,
+        detail: 'The AI deck punished your line before you could stabilize the round.',
+      });
+      return;
     }
 
     render();
@@ -956,6 +1351,8 @@ function initDeckArena() {
 
 renderGameList();
 setEmptyState();
+setMuteButton();
+updateRoundStatus();
 
 window.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
@@ -964,6 +1361,7 @@ window.addEventListener('keydown', (event) => {
     activeReset = null;
     clearRuntime();
     renderGameList();
+    gameState.resultVisible = false;
   }
 });
 
